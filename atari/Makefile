@@ -9,14 +9,15 @@ CC65_TARGET = atari
 CC65_HOME = /usr
 
 # FujiNet Library
-FUJINET_LIB_DIR = fujinet-lib
-FUJINET_LIB = $(FUJINET_LIB_DIR)/fujinet-atari-4.7.4.lib
+FUJINET_LIB_VERSION = 4.7.5
+FUJINET_LIB_DIR = ../fujinet-lib/$(CC65_TARGET)
+FUJINET_LIB = $(FUJINET_LIB_DIR)/fujinet-atari-$(FUJINET_LIB_VERSION).lib
 FUJINET_INCLUDES = -I$(FUJINET_LIB_DIR)
 
 # Compiler & Linker Settings
 CC = $(CC65_HOME)/bin/cl65
 CFLAGS = -t $(CC65_TARGET) -O $(FUJINET_INCLUDES)
-LDFLAGS = -t $(CC65_TARGET) -m $(PROGRAM).map -L $(CC65_HOME)/share/cc65/lib -latari
+LDFLAGS = -t $(CC65_TARGET) -m $(PROGRAM).map -L $(CC65_HOME)/share/cc65/lib
 
 .SUFFIXES:
 .PHONY: all clean

@@ -1,10 +1,14 @@
 #include "ai-sam.h"
 #include "config.h"  // OpenAI API key and URL
 
+static char app_token[65] = {0}; // Buffer for token
+
 // Initialize FujiNet device
 bool init_fujinet()
 {
     AdapterConfig config;
+    uint16_t count = 0;
+    uint8_t buffer[66] = {0}; // keysize + 2
 
     if (!fuji_get_adapter_config(&config))
     {
@@ -15,16 +19,141 @@ bool init_fujinet()
     // DEBUG: Print firmware version
     //printf("FujiNet Firmware: %s\n", config.fn_version);
 
-    return true;
+    // Configure AppKey details: creator, app, key size
+    fuji_set_appkey_details(CREATOR_ID, APP_ID, DEFAULT);
+
+    // Attempt to read existing app key token
+    if (fuji_read_appkey(TOKEN_KEY_ID, &count, buffer))
+    {
+        // Successfully read token, ensure null-termination
+        if (count > 64) count = 64;
+        buffer[count] = '\0';
+        strncpy(app_token, (char*)buffer, sizeof(app_token) - 1);
+        //printf("Loaded token: %s\n", app_token); // Print token for debug
+        return true;
+    }
+    else
+    {
+        // Make default token the app_token
+        strncpy(app_token, DEFAULT_TOKEN, sizeof(app_token));
+        app_token[sizeof(app_token) - 1] = '\0';
+        // and try to get new token
+        return new_convo();
+    }
+}
+
+
+bool new_convo(void)
+{
+    int err;
+    int len;
+
+    // Show message so user knows what is happening
+    printf("Starting new session...");
+
+    // Setup devicespec
+    snprintf(devicespec, sizeof(devicespec), "N1:%s", PROXY_API_URL);
+
+    // Get payload ready
+    snprintf(json_payload, REQUEST_BUFFER_SIZE,
+        "{"
+        "\"token_id\":\"%s\","
+        "\"new\":\"%s\""
+        "}",
+        app_token,
+        DEFAULT_TOKEN
+    );
+
+    err = network_open(devicespec, OPEN_MODE_HTTP_POST, OPEN_TRANS_NONE);
+    if (err != 0)
+    {
+        printf("\nErr: Unable to open network channel.\n");
+        return false;
+    }
+
+    err = network_http_start_add_headers(devicespec);
+    if (err != 0)
+    {
+        printf("\nErr: Unable to add headers.\n");
+        return false;
+    }
+
+    network_http_add_header(devicespec, "Content-Type: application/json");
+    network_http_end_add_headers(devicespec);
+
+    err = network_http_post(devicespec, json_payload);
+    if (err != 0)
+    {
+        printf("\nErr: Failed to send data.\n");
+        network_close(devicespec);
+        return false;
+    }
+
+    err = network_json_parse(devicespec);
+    if (err != 0)
+    {
+        printf("\nErr: Failed to parse JSON response.\n");
+        network_close(devicespec);
+        return false;
+    }
+
+    // Check for error from proxy server
+    err = network_json_query(devicespec, "/error", response_buffer);
+    if (err < 0)
+    {
+        // A FujiNet network‐level error
+        printf("\nNetwork error %d\n", err);
+        network_close(devicespec);
+        return false;
+    }
+    else if (err > 0 && response_buffer[0] != '\0')
+    {
+        // The proxy really did send an "error" field (non‐empty string)
+        printf("\nErr: %s\n", response_buffer);
+        network_close(devicespec);
+        return false;
+    }
+
+    // Extract and save new token
+    err = network_json_query(devicespec, "/token_id", response_buffer);
+    if (err == 0)
+    {
+        printf("\nErr: Token Query failed.\n");
+        network_close(devicespec);
+        return false;
+    }
+    
+    // printf("TokResp (%d): %s\n", sizeof(response_buffer), response_buffer); // Print response for debug
+    len = strlen(response_buffer);
+    if (len > 64) {
+        len = 64;
+    }
+
+    // Copy token from response_buffer into app_token
+    strncpy(app_token, response_buffer, len);
+    app_token[len+1] = '\0';
+    // Write it to AppKey and update in-memory
+    if (!fuji_write_appkey(TOKEN_KEY_ID, (uint16_t)len, (uint8_t*)app_token))
+    {
+        printf("\nErr: Failed to write token to AppKey.\n");
+        return false;
+    }
+    else
+    {
+        //printf("Token saved: \n %s\n", app_token);
+        printf("done!\n");
+        return true;
+    }
 }
 
 // Send request to OpenAI API
 bool send_openai_request(char *user_input)
 {
-    uint8_t err;
+    int err;
+    size_t len;
 
     // Setup devicespec
-    snprintf(devicespec, sizeof(devicespec), "N1:%s", OPENAI_API_URL);
+    snprintf(devicespec, sizeof(devicespec), "N1:%s", PROXY_API_URL);
 
     // DEBUG: Print devicespec
     //printf("%s\n", devicespec);
@@ -35,78 +164,110 @@ bool send_openai_request(char *user_input)
     // Get payload ready
     snprintf(json_payload, REQUEST_BUFFER_SIZE,
         "{"
-        "\"model\":\"gpt-4o-2024-11-20\","
-        "\"messages\":["
-        "{\"role\":\"system\",\"content\":\""
-        "You are a FujiNet SAM text-to-speech assistant. "
-        "Your response must return 2 fields: text_display and text_sam. "
-        "Rules for BOTH text_display and text_sam:"
-        "do NOT use any special formatting, characters, quotation marks, forward or back slashes, "
-        "special symbols, or escape sequences. Do NOT respond with Unicode characters. "
-        "Rules only applying to text_display: numbers must be printed as digits, use ASCII new"
-        "lines when needed, limit the text_display response to 960 characters or less."
-        "Rules only applying to text_sam: numbers must be written as words\"},"
-        "{\"role\":\"user\",\"content\":\"%s\"}"
-        "],"
-        "\"functions\":["
-        "{\"name\":\"vintage_computers_response\","
-        "\"description\":\"Provides two text fields for the user\","
-        "\"parameters\":{"
-        "\"type\":\"object\","
-        "\"properties\":{"
-        "\"text_display\":{\"type\":\"string\",\"description\":\"Human-readable output limited to 960 characters\"},"
-        "\"text_sam\":{\"type\":\"string\",\"description\":\"Phonetic version of the text_display string for SAM\"}"
-        "},"
-        "\"required\":[\"text_display\",\"text_sam\"]"
-        "}}],"
-        "\"function_call\":{\"name\":\"vintage_computers_response\"}"
+        "\"token_id\":\"%s\","
+        "\"content\":\"%s\""
         "}",
+        app_token,
         escaped_input
     );
-
-    printf("Thinking...\n");
 
     err = network_open(devicespec, OPEN_MODE_HTTP_POST, OPEN_TRANS_NONE);
     if (err != 0)
     {
-        printf("Error: Unable to open network channel.\n");
+        printf("Err: Unable to open network channel.\n");
         return false;
     }
 
     err = network_http_start_add_headers(devicespec);
     if (err != 0)
     {
-        printf("Error: Unable to add headers.\n");
+        printf("Err: Unable to add headers.\n");
         return false;
     }
 
-    network_http_add_header(devicespec, "Authorization: Bearer " OPENAI_API_KEY);
     network_http_add_header(devicespec, "Content-Type: application/json");
     network_http_end_add_headers(devicespec);
 
+    printf("Thinking...\n");
+    
     err = network_http_post(devicespec, json_payload);
     if (err != 0)
     {
-        printf("Error: Failed to send data.\n");
+        printf("Err: Failed to send data.\n");
         network_close(devicespec);
         return false;
     }
+
+    // Increase SIO timeout
+    OS.dcb.dtimlo  = 60; // seconds
 
     err = network_json_parse(devicespec);
     if (err != 0)
     {
-        printf("Error: Failed to parse JSON response.\n");
+        printf("Err: Failed to parse JSON response.\n");
         network_close(devicespec);
         return false;
     }
 
-    err = network_json_query(devicespec, "/choices/0/message/function_call/arguments", response_buffer);
-    if (err == 0)
+    // Check for error from proxy server
+    err = network_json_query(devicespec, "/error", response_buffer);
+    if (err < 0)
     {
-        printf("Error: Query failed.\n");
+        // A FujiNet network‐level error
+        printf("Network error %d\n", err);
         network_close(devicespec);
         return false;
     }
+    else if (err > 0 && response_buffer[0] != '\0')
+    {
+        // The proxy really did send an "error" field (non‐empty string)
+        printf("Err: %s\n", response_buffer);
+        network_close(devicespec);
+        return false;
+    }
+    
+    // Extract and save new token if present
+    err = network_json_query(devicespec, "/token_id", response_buffer);
+    if (err == 0)
+    {
+        printf("Err: Token Query failed.\n");
+        network_close(devicespec);
+        return false;
+    }
+
+    // Get the text display
+    err = network_json_query(devicespec, "/text_display", response_buffer);
+    if (err <= 0)
+    {
+        printf("Error: text display query failed.\n");
+        network_close(devicespec);
+        return false;
+    }
+
+    // clamp to buffer size
+    len = (size_t)err;
+    if (len > MAX_TEXT_SIZE)
+        len = MAX_TEXT_SIZE;
+
+    strncpy(text_display, response_buffer, len);
+    text_display[len] = '\0';
+
+    // Get text sam
+    err = network_json_query(devicespec, "/text_sam", response_buffer);
+    if (err <= 0)
+    {
+        printf("Error: text sam query failed.\n");
+        network_close(devicespec);
+        return false;
+    }
+    
+    // clamp to buffer size
+    len = (size_t)err;
+    if (len > MAX_TEXT_SIZE)
+        len = MAX_TEXT_SIZE;
+
+    strncpy(text_sam, response_buffer, len);
+    text_sam[len] = '\0';
 
     network_close(devicespec);
     process_response(response_buffer);
@@ -307,7 +468,7 @@ void display_text(char *text)
         // Pause for reading if screen full
         if (lines >= SCREEN_HEIGHT)
         {
-            printf("\nPress any key to continue...\n");
+            printf("\nPress RETURN to continue...\n");
             getchar();  // Wait for key press before continuing
             lines = 0;
         }
@@ -318,42 +479,73 @@ void display_text(char *text)
 // Speak text using FujiNet SAM
 void speak_text(const char *sam_text)
 {
-    int len = strlen(sam_text);
-    int start = 0;
+    int len;
+    int start;
+    int max_end;
+    int end;
+    int chunk_len;
+    int i;
     char chunk[SAM_CHUNK_SIZE + 1];
+    char c;
+    FILE *printer;
 
-    FILE *printer = fopen("P4:", "w");
-    if (!printer)
-    {
-        printf("Unable to access FujiNet SAM printer device (P4)\nTurning off speech.");
+    len   = strlen(sam_text);
+    start = 0;
+
+    printer = fopen("P4:", "w");
+    if (!printer) {
+        printf("Unable to access FujiNet SAM printer device (P4)\nTurning off speech.\n");
         speak = false;
         return;
     }
 
-    while (start < len)
-    {
-        int end = start + SAM_CHUNK_SIZE;
-        if (end > len)
-        {
-            end = len;
+    while (start < len) {
+        /* determine the farthest we can go in this chunk */
+        max_end = start + SAM_CHUNK_SIZE;
+        if (max_end > len) {
+            max_end = len;
         }
-        else
-        {
-            while (end > start && !isspace(sam_text[end]))
-            {
-                end--;  // Move back to a space to avoid breaking words
-            }
-            if (end == start)
-            {
-                end = start + SAM_CHUNK_SIZE; // If no space found, force break
+        end = max_end;
+
+        /* Try to break on a sentence boundary */
+        for (i = max_end - 1; i > start; --i) {
+            c = sam_text[i];
+            if (c == '.' || c == '?' || c == '!') {
+                end = i + 1;
+                break;
             }
         }
 
-        strncpy(chunk, &sam_text[start], end - start);
-        chunk[end - start] = '\0';
+        /* If no sentence end found, break on last whitespace */
+        if (end == max_end) {
+            for (i = max_end; i > start; --i) {
+                if (isspace((unsigned char)sam_text[i])) {
+                    end = i;
+                    break;
+                }
+            }
+            /* If still no break point, force at max_end */
+            if (end == start) {
+                end = max_end;
+            }
+        }
 
+        /* Copy and NULL-terminate */
+        chunk_len = end - start;
+        if (chunk_len > SAM_CHUNK_SIZE) {
+            chunk_len = SAM_CHUNK_SIZE;
+        }
+        memcpy(chunk, sam_text + start, chunk_len);
+        chunk[chunk_len] = '\0';
+
+        /* Send chunk to SAM */
         fprintf(printer, "%s\n", chunk);
-        start = end + 1;  // Move past the space
+
+        /* move past any whitespace for next chunk */
+        start = end;
+        while (start < len && isspace((unsigned char)sam_text[start])) {
+            start++;
+        }
     }
 
     fclose(printer);
@@ -363,45 +555,82 @@ void speak_text(const char *sam_text)
 void escape_json_string(const char *input, char *output, int output_size)
 {
     int i = 0, j = 0;
-    while (input[i] != '\0' && j < output_size - 2) // Leave space for null terminator
-    {
-        if (input[i] == '"' || input[i] == '\\' || input[i] == 0x39)
-        {
-            if (j < output_size - 3) // Ensure enough space for escape character
-            {
-                output[j++] = '\\';
-            }
-            else
-            {
-                break; // Avoid buffer overflow
-            }
+    while (input[i] != '\0') {
+        char c = input[i];
+
+        // Check if we need to escape this char
+        if (c == '"' || c == '\\' || c == '/') {
+            // We need two bytes: '\' plus the character itself
+            if (j + 2 >= output_size) break;  // not enough room
+            output[j++] = '\\';
+            output[j++] = c;
         }
-        output[j++] = input[i++];
+        else {
+            // Just a normal character
+            if (j + 1 >= output_size) break;
+            output[j++] = c;
+        }
+
+        i++;
     }
-    output[j] = '\0'; // Null-terminate the output string
+
+    // NULL‐terminate
+    if (j < output_size) {
+        output[j] = '\0';
+    } else {
+        output[output_size - 1] = '\0';
+    }
 }
 
 void get_user_input(char *buffer, int max_length)
 {
     int index = 0;
+    int x, y;
     char ch;
 
     while (1)
     {
         ch = cgetc(); // Read keypress
-
+        //printf("%02X", ch);
         if (ch == '\r' || ch == '\n') // Enter key
         {
             buffer[index] = '\0'; // Null-terminate string
             printf("\n"); // Move to new line
             break;
         }
-        else if ((ch == 0x08 || ch == 0x7F) && index > 0) // Handle Backspace
+        else if ((ch == 0x08 || ch == 0x7F || ch == 0x7E) && index > 0) // Handle Backspace
         {
             index--;
-            printf("\b \b"); // Erase last character on screen
+            buffer[index] = '\0';       // Remove last char from buffer
+
+            // Remove the last char on screen and move position
+            x = wherex();
+            y = wherey();
+            // If we’re not in the first column, just move left one
+            if (x > 1)
+            {
+                gotoxy(x - 1, y);
+            }
+            else // Otherwise we’re in column 1
+            {
+                // If not on the very first line, wrap to end of previous line
+                if (y > 1) {
+                    gotoxy(SCREEN_WIDTH, y - 1);
+                }
+                // Otherwise we're at 1,1 and there’s nothing to delete
+            }            
+            cputc(' '); // Overwrite that character with a space
+            // if we moved left, x-1; if we wrapped, SCREEN_WIDTH, y-1
+            if (x > 1)
+            {
+                gotoxy(x - 1, y);
+            }
+            else
+            {
+                gotoxy(SCREEN_WIDTH, y - 1);
+            }
         }
-        else if (index < max_length - 1 && ch >= 32 && ch <= 126) // Normal character
+        else if (index < max_length - 1 && ch >= 32 && ch <= 126 && ch != '~') // Normal character
         {
             buffer[index++] = ch;
             putchar(ch); // Echo character
@@ -416,21 +645,25 @@ void print_help()
     printf(" SPEAKOFF   Turn OFF SAM audio\n");
     printf(" SPEAKON    Turn ON SAM audio\n");
     printf(" CLS        Clear the screen\n");
+    printf(" NEW        Start new convo\n");
 }
 
 int main()
 {
     bool res = false;
 
+    printf("         Welcome to AI SAM!\n");
+    speak_text("I AEM SAEM, YOR FOO-JEE-NET UH-SIS-TUHNT");
+
     if (!init_fujinet())
     {
+        printf("Press any key to quit\n");
+        getchar();
         return 1;  // Exit if FujiNet is not available
     }
 
-    printf("         Welcome to AI SAM!\n");
     printf("   Type HELP for a list of commands\n");
-    printf("           Ask me anything...");
-    speak_text("I AEM SAEM, YOR FOO-JEE-NET UH-SIS-TUHNT");
+    printf("           Ask me anything...\n");
 
     while (1)
     {
@@ -466,13 +699,13 @@ int main()
         {
             clrscr();
         }
+        else if(strcmp(user_input, "new") == 0 || strcmp(user_input, "NEW") == 0)
+        {
+            new_convo();
+        }
         else
         {
             res = send_openai_request(user_input);
-            if (res)
-            {
-                // Do something if request failed
-            }
         }
     }
 
