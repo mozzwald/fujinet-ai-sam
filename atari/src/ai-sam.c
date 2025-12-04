@@ -1,14 +1,16 @@
 #include "ai-sam.h"
-#include "config.h"  // OpenAI API key and URL
+#include "config.h"  // PROXY_API_URL and DEFAULT_TOKEN definitions
 
-static char app_token[65] = {0}; // Buffer for token
+static char app_token[65] = {0};
 
-// Initialize FujiNet device
-bool init_fujinet()
+// ---------------------------------------------------------------------------
+// FujiNet initialization and session handling
+// ---------------------------------------------------------------------------
+bool init_fujinet(void)
 {
     AdapterConfig config;
     uint16_t count = 0;
-    uint8_t buffer[66] = {0}; // keysize + 2
+    uint8_t buffer[66] = {0};
 
     if (!fuji_get_adapter_config(&config))
     {
@@ -16,53 +18,36 @@ bool init_fujinet()
         return false;
     }
 
-    // DEBUG: Print firmware version
-    //printf("FujiNet Firmware: %s\n", config.fn_version);
-
-    // Configure AppKey details: creator, app, key size
     fuji_set_appkey_details(CREATOR_ID, APP_ID, DEFAULT);
 
-    // Attempt to read existing app key token
     if (fuji_read_appkey(TOKEN_KEY_ID, &count, buffer))
     {
-        // Successfully read token, ensure null-termination
         if (count > 64) count = 64;
         buffer[count] = '\0';
         strncpy(app_token, (char*)buffer, sizeof(app_token) - 1);
-        //printf("Loaded token: %s\n", app_token); // Print token for debug
         return true;
     }
     else
     {
-        // Make default token the app_token
         strncpy(app_token, DEFAULT_TOKEN, sizeof(app_token));
         app_token[sizeof(app_token) - 1] = '\0';
-        // and try to get new token
         return new_convo();
     }
 }
 
-
 bool new_convo(void)
 {
-    int err;
-    int len;
+    int err, len;
 
-    // Show message so user knows what is happening
     printf("Starting new session...");
+    snprintf(devicespec, sizeof(devicespec), "N1:%s%s", PROXY_API_URL, SUBMIT_URL);
 
-    // Setup devicespec
-    snprintf(devicespec, sizeof(devicespec), "N1:%s", PROXY_API_URL);
-
-    // Get payload ready
     snprintf(json_payload, REQUEST_BUFFER_SIZE,
         "{"
         "\"token_id\":\"%s\","
         "\"new\":\"%s\""
         "}",
-        app_token,
-        DEFAULT_TOKEN
-    );
+        app_token, DEFAULT_TOKEN);
 
     err = network_open(devicespec, OPEN_MODE_HTTP_POST, OPEN_TRANS_NONE);
     if (err != 0)
@@ -71,13 +56,7 @@ bool new_convo(void)
         return false;
     }
 
-    err = network_http_start_add_headers(devicespec);
-    if (err != 0)
-    {
-        printf("\nErr: Unable to add headers.\n");
-        return false;
-    }
-
+    network_http_start_add_headers(devicespec);
     network_http_add_header(devicespec, "Content-Type: application/json");
     network_http_end_add_headers(devicespec);
 
@@ -92,37 +71,25 @@ bool new_convo(void)
     err = network_json_parse(devicespec);
     if (err != 0)
     {
-        printf("\nErr: Failed to parse JSON response.\n");
+        printf("\nErr: Failed to parse JSON.\n");
         network_close(devicespec);
         return false;
     }
 
-    // Check for error from proxy server
-    err = network_json_query(devicespec, "/error", response_buffer);
-    if (err < 0)
-    {
-        // A FujiNet network‐level error
-        printf("\nNetwork error %d\n", err);
-        network_close(devicespec);
-        return false;
-    }
-    else if (err > 0 && response_buffer[0] != '\0')
-    {
-        // The proxy really did send an "error" field (non‐empty string)
-        printf("\nErr: %s\n", response_buffer);
-        network_close(devicespec);
-        return false;
-    }
-
-    // Extract and save new token
     err = network_json_query(devicespec, "/token_id", response_buffer);
-    if (err == 0)
+    if (err > 0)
     {
-        printf("\nErr: Token Query failed.\n");
+        strncpy(app_token, response_buffer, sizeof(app_token) - 1);
+    }
+    else
+    {
+        printf("\nError: Token not received.\n");
         network_close(devicespec);
         return false;
     }
-    
+
+    network_close(devicespec);
+
     // printf("TokResp (%d): %s\n", sizeof(response_buffer), response_buffer); // Print response for debug
     len = strlen(response_buffer);
     if (len > 64) {
@@ -146,206 +113,163 @@ bool new_convo(void)
     }
 }
 
-// Send request to OpenAI API
+// ---------------------------------------------------------------------------
+// Send request asynchronously to submit_request.php
+// ---------------------------------------------------------------------------
 bool send_openai_request(char *user_input)
 {
     int err;
-    size_t len;
+    int elapsed = 0;
 
-    // Setup devicespec
-    snprintf(devicespec, sizeof(devicespec), "N1:%s", PROXY_API_URL);
-
-    // DEBUG: Print devicespec
-    //printf("%s\n", devicespec);
-
-    // Clean up the user input
     escape_json_string(user_input, escaped_input, sizeof(escaped_input));
 
-    // Get payload ready
+    // Step 1: POST user input to submit_request.php
+    snprintf(devicespec, sizeof(devicespec), "N1:%s%s", PROXY_API_URL, SUBMIT_URL);
+
     snprintf(json_payload, REQUEST_BUFFER_SIZE,
         "{"
         "\"token_id\":\"%s\","
-        "\"content\":\"%s\""
+        "\"message\":\"%s\""
         "}",
-        app_token,
-        escaped_input
-    );
+        app_token, escaped_input);
 
     err = network_open(devicespec, OPEN_MODE_HTTP_POST, OPEN_TRANS_NONE);
     if (err != 0)
     {
-        printf("Err: Unable to open network channel.\n");
+        printf("Error: Unable to open network channel.\n");
         return false;
     }
 
-    err = network_http_start_add_headers(devicespec);
-    if (err != 0)
-    {
-        printf("Err: Unable to add headers.\n");
-        return false;
-    }
-
+    network_http_start_add_headers(devicespec);
     network_http_add_header(devicespec, "Content-Type: application/json");
     network_http_end_add_headers(devicespec);
 
-    printf("Thinking...\n");
-    
     err = network_http_post(devicespec, json_payload);
     if (err != 0)
     {
-        printf("Err: Failed to send data.\n");
+        printf("Error: Failed to send data.\n");
         network_close(devicespec);
         return false;
     }
-
-    // Increase SIO timeout
-    OS.dcb.dtimlo  = 60; // seconds
 
     err = network_json_parse(devicespec);
     if (err != 0)
     {
-        printf("Err: Failed to parse JSON response.\n");
+        printf("Error: Failed to parse JSON response.\n");
         network_close(devicespec);
         return false;
     }
 
-    // Check for error from proxy server
-    err = network_json_query(devicespec, "/error", response_buffer);
-    if (err < 0)
-    {
-        // A FujiNet network‐level error
-        printf("Network error %d\n", err);
-        network_close(devicespec);
-        return false;
-    }
-    else if (err > 0 && response_buffer[0] != '\0')
-    {
-        // The proxy really did send an "error" field (non‐empty string)
-        printf("Err: %s\n", response_buffer);
-        network_close(devicespec);
-        return false;
-    }
-    
-    // Extract and save new token if present
-    err = network_json_query(devicespec, "/token_id", response_buffer);
-    if (err == 0)
-    {
-        printf("Err: Token Query failed.\n");
-        network_close(devicespec);
-        return false;
-    }
-
-    // Get the text display
-    err = network_json_query(devicespec, "/text_display", response_buffer);
-    if (err <= 0)
-    {
-        printf("Error: text display query failed.\n");
-        network_close(devicespec);
-        return false;
-    }
-
-    // clamp to buffer size
-    len = (size_t)err;
-    if (len > MAX_TEXT_SIZE)
-        len = MAX_TEXT_SIZE;
-
-    strncpy(text_display, response_buffer, len);
-    text_display[len] = '\0';
-
-    // Get text sam
-    err = network_json_query(devicespec, "/text_sam", response_buffer);
-    if (err <= 0)
-    {
-        printf("Error: text sam query failed.\n");
-        network_close(devicespec);
-        return false;
-    }
-    
-    // clamp to buffer size
-    len = (size_t)err;
-    if (len > MAX_TEXT_SIZE)
-        len = MAX_TEXT_SIZE;
-
-    strncpy(text_sam, response_buffer, len);
-    text_sam[len] = '\0';
-
+    // Extract message_id and status
+    network_json_query(devicespec, "/message_id", message_id);
+    network_json_query(devicespec, "/status", status);
     network_close(devicespec);
-    process_response(response_buffer);
-    return true;
+
+    if (strlen(message_id) == 0)
+    {
+        printf("Error: Invalid response from server.\n");
+        return false;
+    }
+
+    printf("Thinking", message_id);
+
+    // Step 2: Poll check_request.php until complete or timeout
+    for (elapsed = 0; elapsed < CHECK_TIMEOUT; elapsed += CHECK_INTERVAL)
+    {
+        snprintf(devicespec, sizeof(devicespec),
+                 "N1:%s%s?token_id=%s&message_id=%s",
+                 PROXY_API_URL, CHECK_URL, app_token, message_id);
+
+        err = network_open(devicespec, OPEN_MODE_HTTP_GET, OPEN_TRANS_NONE);
+        if (err != 0)
+        {
+            printf("Error: Network open failed.\n");
+            sleep(CHECK_INTERVAL);
+            continue;
+        }
+
+        err = network_json_parse(devicespec);
+        if (err != 0)
+        {
+            printf("Error: JSON parse failed.\n");
+            network_close(devicespec);
+            sleep(CHECK_INTERVAL);
+            continue;
+        }
+
+        network_json_query(devicespec, "/status", status);
+
+        if (strcmp(status, "complete") == 0)
+        {
+            // Retrieve the completed JSON response
+            network_json_query(devicespec, "/text_display", response_buffer);
+            strncpy(text_display, response_buffer, sizeof(text_display) - 1);
+
+            network_json_query(devicespec, "/text_sam", response_buffer);
+            strncpy(text_sam, response_buffer, sizeof(text_sam) - 1);
+
+            network_close(devicespec);
+
+            // Compose minimal JSON string for process_response()
+            snprintf(response_buffer, sizeof(response_buffer),
+                     "{\"text_display\":\"%s\",\"text_sam\":\"%s\"}",
+                     text_display, text_sam);
+            printf("\n"); // new line
+            process_response(response_buffer);
+            return true;
+        }
+
+        network_close(devicespec);
+        printf(".");
+        fflush(stdout);
+        sleep(CHECK_INTERVAL);
+    }
+
+    // Timeout after 90 seconds
+    printf("\nError: Request timed out after %d seconds.\n", CHECK_TIMEOUT);
+    return false;
 }
 
-// Process the JSON Response
+// ---------------------------------------------------------------------------
+// Process JSON and forward to display/speech routines
+// ---------------------------------------------------------------------------
 void process_response(const char *json_response)
 {
     char *start, *end;
-
-    // DEBUG: Print the full JSON response
-    //printf("DEBUG: JSON Response:\n%s\n", json_response);
-    //getchar();  // Wait for key press before continuing
 
     // Extract text_display
     start = strstr(json_response, "\"text_display\":\"");
     if (start)
     {
-        start += strlen("\"text_display\":\"");  // Move past key name
-        end = strchr(start, '\"');  // Find closing quote
+        start += strlen("\"text_display\":\"");
+        end = strchr(start, '\"');
         if (end && (end - start) < sizeof(text_display))
         {
             strncpy(text_display, start, end - start);
-            text_display[end - start] = '\0';  // Null-terminate
+            text_display[end - start] = '\0';
         }
     }
-
-    // DEBUG: Print extracted text_display
-    //printf("DEBUG: Extracted text_display:\n%s\n", text_display);
-    //getchar();  // Wait for key press before continuing
 
     // Extract text_sam
     start = strstr(json_response, "\"text_sam\":\"");
     if (start)
     {
-        start += strlen("\"text_sam\":\"");  // Move past key name
-        end = strchr(start, '\"');  // Find closing quote
+        start += strlen("\"text_sam\":\"");
+        end = strchr(start, '\"');
         if (end && (end - start) < sizeof(text_sam))
         {
             strncpy(text_sam, start, end - start);
-            text_sam[end - start] = '\0';  // Null-terminate
+            text_sam[end - start] = '\0';
         }
     }
 
-    // DEBUG: Print extracted text_sam
-    //printf("DEBUG: Extracted text_sam:\n%s\n", text_sam);
-    //getchar();  // Wait for key press before continuing
-
-    // Display extracted text
     if (strlen(text_display) > 0)
-    {
         display_text(text_display);
-    }
     else
-    {
         printf("Error: No text to display\n");
-    }
 
-    // DEBUG: Pause after output
-    //printf("\nPress any key to continue...\n");
-    //getchar();  // Wait for key press before continuing
-
-    if (speak == true)
-    {
-        if (strlen(text_sam) > 0)
-        {
-            speak_text(text_sam);
-        }
-        else
-        {
-            printf("Error: No text to speak\n");
-        }
-    }
-
-    // DEBUG: Pause after output
-    //printf("\nPress any key to continue...\n");
-    //getchar();  // Wait for key press before continuing
+    if (speak && strlen(text_sam) > 0)
+        speak_text(text_sam);
 }
 
 // Convert UTF-8 characters to ASCII equivalents and replace them in text
@@ -640,12 +564,28 @@ void get_user_input(char *buffer, int max_length)
 
 void print_help()
 {
+    //      -------------------40-------------------
+    printf("-------- FujiNet AI SAM v3 HELP --------\n");
+    printf("AI SAM is an interface with OpenAI\n");
+    printf("ChatGPT. You can talk with it about\n");
+    printf("anything you like. It has a modest\n");
+    printf("context window to remember some of your\n");
+    printf("conversation. Messages are stored on a\n");
+    printf("server by token id for up to 7 days\n");
+    printf("after which they are deleted. You can\n");
+    printf("delete your chat history at any time by\n");
+    printf("using the 'NEW' command which tells the\n");
+    printf("server to delete all messages for your\n");
+    printf("token id and provides a new token.\n");
+    printf("\n");
+    printf("\n");
+    printf("\n");
     printf(" HELP       Prints this message\n");
     printf(" EXIT       Exit the program\n");
     printf(" SPEAKOFF   Turn OFF SAM audio\n");
     printf(" SPEAKON    Turn ON SAM audio\n");
     printf(" CLS        Clear the screen\n");
-    printf(" NEW        Start new convo\n");
+    printf(" NEW        Start new conversation\n");
 }
 
 int main()

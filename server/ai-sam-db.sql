@@ -24,8 +24,10 @@ CREATE TABLE `messages` (
   `token_id` varchar(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   `role` enum('user','assistant') COLLATE utf8mb4_unicode_ci NOT NULL,
   `content` text COLLATE utf8mb4_unicode_ci NOT NULL,
-  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+  `created_at` datetime(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+  `status` tinyint NOT NULL DEFAULT 0
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 
 --
 -- Table structure for table `tokens`
