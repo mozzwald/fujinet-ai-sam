@@ -120,7 +120,10 @@ bool send_openai_request(char *user_input)
 {
     int err;
     int elapsed = 0;
+    bool retried = false;
+    char error_msg[64] = "";
 
+retry_submit:
     escape_json_string(user_input, escaped_input, sizeof(escaped_input));
 
     // Step 1: POST user input to submit_request.php
@@ -160,6 +163,26 @@ bool send_openai_request(char *user_input)
         return false;
     }
 
+    error_msg[0] = '\0';
+    err = network_json_query(devicespec, "/error", error_msg);
+    if (err > 0 && strcmp(error_msg, "Invalid token") == 0)
+    {
+        network_close(devicespec);
+        printf("Token expired. Requesting new token...\n");
+        if (!new_convo())
+        {
+            printf("Error: Failed to renew token.\n");
+            return false;
+        }
+        if (!retried)
+        {
+            retried = true;
+            goto retry_submit;
+        }
+        printf("Error: Token renewed but request failed.\n");
+        return false;
+    }
+
     // Extract message_id and status
     network_json_query(devicespec, "/message_id", message_id);
     network_json_query(devicespec, "/status", status);
@@ -195,6 +218,16 @@ bool send_openai_request(char *user_input)
             network_close(devicespec);
             sleep(CHECK_INTERVAL);
             continue;
+        }
+
+        error_msg[0] = '\0';
+        err = network_json_query(devicespec, "/error", error_msg);
+        if (err > 0 && strcmp(error_msg, "Token expired") == 0)
+        {
+            printf("\nToken expired. Requesting new token...\n");
+            network_close(devicespec);
+            new_convo();
+            return false;
         }
 
         network_json_query(devicespec, "/status", status);
