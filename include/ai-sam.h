@@ -16,8 +16,13 @@
 #include "fujinet-clock.h"
 
 // Buffer Sizes
+#ifdef _CMOC_VERSION_
+#define RESPONSE_BUFFER_SIZE 2048
+#define REQUEST_BUFFER_SIZE 1536
+#else
 #define RESPONSE_BUFFER_SIZE 3072
 #define REQUEST_BUFFER_SIZE 2048
+#endif
 #define SAM_CHUNK_SIZE 100
 #define MAX_TEXT_SIZE 960
 
@@ -38,21 +43,23 @@
 #define CHECK_URL  "check_request.php"
 
 // Global buffers
-char response_buffer[RESPONSE_BUFFER_SIZE];
-char devicespec[256];
-char json_payload[REQUEST_BUFFER_SIZE];
-char user_input[1024];
-char escaped_input[1200];
-char text_display[MAX_TEXT_SIZE] = "";
-char text_sam[MAX_TEXT_SIZE] = "";
-bool speak = true;
-char message_id[64] = "";
-char status[32] = "";
+extern char response_buffer[];
+extern char devicespec[];
+extern char json_payload[];
+extern char user_input[];
+extern char escaped_input[];
+extern char text_display[];
+#ifdef BUILD_ATARI
+extern char text_sam[];
+#endif
+extern bool speak;
+extern char message_id[];
+extern char status[];
 
 // Function prototypes
 bool init_fujinet(void);
 bool send_openai_request(char *user_input);
-void process_response(const char *json_response);
+void process_response(const char *text_display, const char *text_sam);
 void display_text(char *text);
 void speak_text(const char *sam_text);
 void escape_json_string(const char *input, char *output, int output_size);
