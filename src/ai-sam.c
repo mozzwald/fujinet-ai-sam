@@ -603,10 +603,10 @@ static void print_wrapped(const char *text)
 
     while (*p)
     {
-        const char *word = p;
+        const char *wstart = p;
         int wl;
         while (*p && !isspace((unsigned char)*p)) p++;
-        wl = (int)(p - word);
+        wl = (int)(p - wstart);
         if (line_len > 0 && line_len + 1 + wl > w)
         {
             putchar('\n');
@@ -617,9 +617,9 @@ static void print_wrapped(const char *text)
             putchar(' ');
             line_len++;
         }
-        while (word < p)
+        while (wstart < p)
         {
-            putchar(*word++);
+            putchar(*wstart++);
             line_len++;
         }
         while (*p == ' ' || *p == '\t') p++;
