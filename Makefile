@@ -31,8 +31,6 @@ PLATFORM_COMBOS = \
   msxdos+=msx \
   adam_cpm+=adam
 
-CFLAGS_EXTRA_COCO += -Wno-const
-include hirestxt-mod-lib.mk
 include mekkogx/toplevel-rules.mk
 
 # If you need to add extra platform-specific steps, do it below:
@@ -41,6 +39,5 @@ include mekkogx/toplevel-rules.mk
 # or
 #   apple2/disk: apple2/custom-step1 apple2/custom-step2
 
-EXTRA_C_DEPS_COCO = .get_hirestxt_lib
 LDFLAGS_EXTRA_COCO = --org=2200
 

@@ -26,8 +26,16 @@
 #define SAM_CHUNK_SIZE 100
 #define MAX_TEXT_SIZE 960
 
+#ifdef BUILD_MSDOS
+extern int screen_width;
+extern int screen_height;
+#define SCREEN_WIDTH  screen_width
+#define SCREEN_HEIGHT (screen_height - 1)
+void msdos_init_screen(void);
+#else
 #define SCREEN_WIDTH 40
 #define SCREEN_HEIGHT 20
+#endif
 
 // App Key Details
 #define CREATOR_ID 0x3022
