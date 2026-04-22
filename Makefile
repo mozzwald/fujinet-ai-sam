@@ -1,5 +1,8 @@
 PRODUCT = ai-sam
-PLATFORMS = coco apple2 atari c64 adam msdos msxrom adam_cpm
+PLATFORMS = coco apple2 atari c64 adam msxrom adam_cpm
+
+# To make msdos, run "make-exp msdos".
+#PLATFORMS += msdos
 
 # You can run 'make <platform>' to build for a specific platform,
 # or 'make <platform>/<target>' for a platform-specific target.
