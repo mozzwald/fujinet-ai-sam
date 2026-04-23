@@ -1,5 +1,8 @@
 PRODUCT = ai-sam
-PLATFORMS = coco apple2 atari c64 adam msdos msxrom adam_cpm
+PLATFORMS = coco apple2 atari c64 adam msxrom adam_cpm
+
+# To make msdos, run "make-exp msdos".
+#PLATFORMS += msdos
 
 # You can run 'make <platform>' to build for a specific platform,
 # or 'make <platform>/<target>' for a platform-specific target.
@@ -21,6 +24,7 @@ CFLAGS += -DBUILD_$(PLATFORM_UC)
 # - empty which will use whatever is the latest
 # - undefined, no fujinet-lib will be used
 FUJINET_LIB = https://github.com/FujiNetWIFI/fujinet-lib.git
+HIRESTXT_LIB = 0.5.0.1
 
 # Define extra dirs ("combos") that expand with a platform.
 # Format: platform+=combo1,combo2
@@ -31,8 +35,6 @@ PLATFORM_COMBOS = \
   msxdos+=msx \
   adam_cpm+=adam
 
-CFLAGS_EXTRA_COCO += -Wno-const
-include hirestxt-mod-lib.mk
 include mekkogx/toplevel-rules.mk
 
 # If you need to add extra platform-specific steps, do it below:
@@ -41,6 +43,5 @@ include mekkogx/toplevel-rules.mk
 # or
 #   apple2/disk: apple2/custom-step1 apple2/custom-step2
 
-EXTRA_C_DEPS_COCO = .get_hirestxt_lib
 LDFLAGS_EXTRA_COCO = --org=2200
 

@@ -585,27 +585,85 @@ void get_user_input(char *buffer, int max_length)
 #endif
 }
 
+static void print_centered(const char *s)
+{
+    int len = (int)strlen(s);
+    int pad = (SCREEN_WIDTH - len) / 2;
+    int i;
+    if (pad < 0) pad = 0;
+    for (i = 0; i < pad; i++) putchar(' ');
+    printf("%s\n", s);
+}
+
+static void print_wrapped(const char *text)
+{
+    int w = SCREEN_WIDTH;
+    int line_len = 0;
+    const char *p = text;
+
+    while (*p)
+    {
+        const char *wstart = p;
+        int wl;
+        while (*p && !isspace((unsigned char)*p)) p++;
+        wl = (int)(p - wstart);
+        if (line_len > 0 && line_len + 1 + wl > w)
+        {
+            putchar('\n');
+            line_len = 0;
+        }
+        if (line_len > 0)
+        {
+            putchar(' ');
+            line_len++;
+        }
+        while (wstart < p)
+        {
+            putchar(*wstart++);
+            line_len++;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\n')
+        {
+            putchar('\n');
+            line_len = 0;
+            p++;
+        }
+    }
+    if (line_len > 0) putchar('\n');
+}
+
 void print_help()
 {
-    //      -------------------40-------------------
-    printf("-------- FujiNet AI SAM v3 HELP --------\n");
-    printf("AI SAM is an interface with OpenAI\n");
-    printf("ChatGPT. You can talk with it about\n");
-    printf("anything you like. It has a modest\n");
-    printf("context window to remember some of your\n");
-    printf("conversation. Messages are stored on a\n");
-    printf("server by token id for up to 7 days\n");
-    printf("after which they are deleted. You can\n");
-    printf("delete your chat history at any time by\n");
-    printf("using the 'NEW' command which tells the\n");
-    printf("server to delete all messages for your\n");
-    printf("token id and provides a new token.\n");
-    printf("\n");
-    printf("\n");
+    const char *title = "FujiNet AI SAM v3 HELP";
+    int w = SCREEN_WIDTH;
+    int tlen = (int)strlen(title);
+    int dashes = w - tlen - 2;
+    int left, right, i;
+
+    if (dashes < 0) dashes = 0;
+    left = dashes / 2;
+    right = dashes - left;
+    for (i = 0; i < left; i++) putchar('-');
+    printf(" %s ", title);
+    for (i = 0; i < right; i++) putchar('-');
+    putchar('\n');
+
+    print_wrapped(
+        "AI SAM is an interface with OpenAI ChatGPT. "
+        "You can talk with it about anything you like. "
+        "It has a modest context window to remember some "
+        "of your conversation. Messages are stored on a "
+        "server by token id for up to 7 days after which "
+        "they are deleted. You can delete your chat "
+        "history at any time by using the 'NEW' command "
+        "which tells the server to delete all messages "
+        "for your token id and provides a new token."
+    );
     printf("\n");
     printf(" HELP       Prints this message\n");
     printf(" EXIT       Exit the program\n");
-#ifdef BUILD_ATARI   
+#ifdef BUILD_ATARI
     printf(" SPEAKOFF   Turn OFF SAM audio\n");
     printf(" SPEAKON    Turn ON SAM audio\n");
 #endif
@@ -620,8 +678,12 @@ int main()
 #ifdef _CMOC_VERSION_
     hirestxt_init();
 #endif
+#ifdef BUILD_MSDOS
+    setbuf(stdout, NULL);
+    msdos_init_screen();
+#endif
 
-    printf("         Welcome to AI SAM!\n");
+    print_centered("Welcome to AI SAM!");
     speak_text("I AEM SAEM, YOR FOO-JEE-NET UH-SIS-TUHNT");
 
     if (!init_fujinet())
@@ -631,8 +693,8 @@ int main()
         return 1;  // Exit if FujiNet is not available
     }
 
-    printf("   Type HELP for a list of commands\n");
-    printf("           Ask me anything...\n");
+    print_centered("Type HELP for a list of commands");
+    print_centered("Ask me anything...");
 
     while (1)
     {
